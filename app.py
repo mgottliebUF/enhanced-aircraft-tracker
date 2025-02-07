@@ -144,10 +144,10 @@ def fetch_real_flight_data():
                     'altitude': (flight[7] or 0) * 3.28084,  # Convert meters to feet
                     'ground_speed': (flight[9] or 0) * 1.94384,  # Convert m/s to knots
                     'heading': heading,
-                    'past_lats': past_lats,
-                    'past_lons': past_lons,
-                    'future_lats': future_lats,
-                    'future_lons': future_lons
+                    'past_path_lats': past_lats,
+                    'past_path_lons': past_lons,
+                    'future_path_lats': future_lats,
+                    'future_path_lons': future_lons
                 }
                 
                 flights_data.append(flight_entry)
@@ -235,11 +235,11 @@ def main():
     ))
 
     # Plot flights with past and future paths
-    for idx, flight in flight_data.iterrows():
+    for _, flight in flight_data.iterrows():
         # Past path (lighter, dashed)
         fig_map.add_trace(go.Scattergeo(
-            lon=flight['past_lons'],
-            lat=flight['past_lats'],
+            lon=flight['past_path_lons'],
+            lat=flight['past_path_lats'],
             mode='lines',
             name=f"{flight['flight_id']} - Past Path",
             line=dict(width=2, color='gray', dash='dot')
@@ -247,8 +247,8 @@ def main():
         
         # Future path (lighter, dashed)
         fig_map.add_trace(go.Scattergeo(
-            lon=flight['future_lons'],
-            lat=flight['future_lats'],
+            lon=flight['future_path_lons'],
+            lat=flight['future_path_lats'],
             mode='lines',
             name=f"{flight['flight_id']} - Future Path",
             line=dict(width=2, color='lightblue', dash='dot')
@@ -316,5 +316,4 @@ def main():
             st.metric("Heading", f"{flight['heading']:.0f}°")
 
 # Run the main application
-if __name__ == "__main__":
-    main()
+main()
