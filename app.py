@@ -5,63 +5,73 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import math
-import time
 
 class KalmanFilter:
     """
     Advanced Kalman Filter for Aerospace Tracking
     """
-    def __init__(self, initial_state, process_noise_cov, measurement_noise_cov):
-        # State vector: [latitude, longitude, altitude, velocity, heading]
+    def __init__(self, initial_state):
+        """
+        Initialize Kalman Filter
+        
+        :param initial_state: Initial state vector [latitude, longitude, altitude, velocity, acceleration]
+        """
+        # State vector
         self.state = np.array(initial_state, dtype=float)
         
-        # State transition and measurement matrices
+        # State transition matrix
         self.F = np.eye(5)
+        self.F[0, 1] = 1  # Latitude depends on longitude
+        self.F[1, 2] = 1  # Longitude depends on altitude
+        
+        # Measurement matrix
         self.H = np.eye(5)
         
-        # Noise covariance matrices
-        self.Q = process_noise_cov
-        self.R = measurement_noise_cov
+        # Process noise covariance
+        self.Q = np.diag([0.001, 0.001, 0.01, 0.1, 0.01])
         
-        # Error covariance
+        # Measurement noise covariance
+        self.R = np.diag([0.01, 0.01, 0.1, 0.5, 0.1])
+        
+        # Estimation error covariance
         self.P = np.eye(5)
         
         # Tracking histories
-        self.state_history = [self.state]
+        self.state_history = [self.state.copy()]
         self.innovation_history = []
-        self.kalman_gain_history = []
     
-    def predict(self, dt=1.0):
-        """Prediction step of Kalman Filter"""
-        self.F = np.array([
-            [1, 0, 0, dt, 0],    # Latitude update
-            [0, 1, 0, 0, dt],    # Longitude update
-            [0, 0, 1, 0, 0],     # Altitude update
-            [0, 0, 0, 1, 0],     # Velocity update
-            [0, 0, 0, 0, 1]      # Heading update
-        ])
+    def predict(self):
+        """
+        Prediction step of Kalman Filter
         
+        :return: Predicted state
+        """
+        # Predict state
         self.state = self.F @ self.state
+        
+        # Predict error covariance
         self.P = self.F @ self.P @ self.F.T + self.Q
         
         return self.state
     
     def update(self, measurement):
-        """Update step of Kalman Filter"""
+        """
+        Update step of Kalman Filter
+        
+        :param measurement: New measurement vector
+        :return: Updated state
+        """
         # Calculate Kalman Gain
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T @ np.linalg.inv(S)
         
-        # Store Kalman Gain
-        self.kalman_gain_history.append(K)
-        
-        # Calculate innovation
+        # Calculate innovation (measurement residual)
         innovation = measurement - self.H @ self.state
         self.innovation_history.append(innovation)
         
         # Update state estimation
         self.state = self.state + K @ innovation
-        self.state_history.append(self.state)
+        self.state_history.append(self.state.copy())
         
         # Update error covariance
         self.P = (np.eye(5) - K @ self.H) @ self.P
@@ -119,22 +129,57 @@ def fetch_real_flight_data():
         st.error(f"Error fetching flight data: {e}")
         return pd.DataFrame()
 
+def run_kalman_filter_simulation(flight_data):
+    """
+    Run Kalman Filter simulation for a flight
+    
+    :param flight_data: DataFrame with flight data
+    :return: Kalman Filter object with simulation results
+    """
+    # Initial state
+    initial_state = [
+        flight_data['latitude'].iloc[0],
+        flight_data['longitude'].iloc[0],
+        flight_data['altitude'].iloc[0],
+        flight_data['ground_speed'].iloc[0],
+        0  # Initial acceleration
+    ]
+    
+    # Create Kalman Filter
+    kf = KalmanFilter(initial_state)
+    
+    # Simulate measurements with some noise
+    for i in range(1, len(flight_data)):
+        # Add some measurement noise
+        noisy_measurement = [
+            flight_data['latitude'].iloc[i] + np.random.normal(0, 0.01),
+            flight_data['longitude'].iloc[i] + np.random.normal(0, 0.01),
+            flight_data['altitude'].iloc[i] + np.random.normal(0, 1),
+            flight_data['ground_speed'].iloc[i] + np.random.normal(0, 0.1),
+            0  # Acceleration measurement
+        ]
+        
+        # Predict and update
+        kf.predict()
+        kf.update(noisy_measurement)
+    
+    return kf
+
 def main():
-    st.set_page_config(layout="wide", page_title="Advanced Flight Tracking", page_icon="✈️")
+    st.set_page_config(layout="wide", page_title="Advanced Kalman Filter Flight Tracker", page_icon="🛩️")
     
     # Title and introduction
-    st.title("🛩️ Advanced Flight Tracking & Kalman Filter Analysis")
+    st.title("🛩️ Advanced Kalman Filter Flight Tracking")
     st.markdown("""
-    This application provides comprehensive flight tracking and analysis 
-    using advanced Kalman Filter algorithms.
+    Comprehensive flight tracking with advanced Kalman Filter state estimation.
     """)
     
     # Sidebar for navigation
     page = st.sidebar.radio("Select Analysis View", [
         "Flight Map",
+        "Kalman Filter Analysis",
         "Flight Details",
         "Performance Metrics",
-        "Kalman Filter Visualization",
         "Statistical Analysis"
     ])
     
@@ -181,7 +226,7 @@ def main():
                 marker=dict(
                     size=10, 
                     color='red',
-                    symbol='aircraft'
+                    symbol='circle'
                 )
             ))
         
@@ -201,6 +246,61 @@ def main():
         )
         
         st.plotly_chart(fig_map, use_container_width=True)
+    
+    elif page == "Kalman Filter Analysis":
+        # Kalman Filter Visualization
+        st.header("🔍 Kalman Filter State Estimation")
+        
+        # Run Kalman Filter simulation for selected flights
+        for flight in selected_flights:
+            st.subheader(f"Kalman Filter Analysis for {flight}")
+            
+            # Get flight data
+            flight_data = filtered_df[filtered_df['flight_id'] == flight]
+            
+            # Run Kalman Filter simulation
+            kf = run_kalman_filter_simulation(flight_data)
+            
+            # Visualize state history
+            state_labels = ['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Acceleration']
+            fig_state = go.Figure()
+            
+            # State history plot
+            state_history = np.array(kf.state_history)
+            for i, label in enumerate(state_labels):
+                fig_state.add_trace(go.Scatter(
+                    y=state_history[:, i],
+                    mode='lines+markers',
+                    name=label
+                ))
+            
+            fig_state.update_layout(
+                title=f'Kalman Filter State Estimation for {flight}',
+                xaxis_title='Time Steps',
+                yaxis_title='State Value'
+            )
+            
+            st.plotly_chart(fig_state, use_container_width=True)
+            
+            # Innovation history plot
+            if kf.innovation_history:
+                fig_innovation = go.Figure()
+                innovation_history = np.array(kf.innovation_history)
+                
+                for i, label in enumerate(state_labels):
+                    fig_innovation.add_trace(go.Scatter(
+                        y=innovation_history[:, i],
+                        mode='lines+markers',
+                        name=label
+                    ))
+                
+                fig_innovation.update_layout(
+                    title=f'Kalman Filter Innovation for {flight}',
+                    xaxis_title='Measurement Steps',
+                    yaxis_title='Innovation'
+                )
+                
+                st.plotly_chart(fig_innovation, use_container_width=True)
     
     elif page == "Flight Details":
         # Detailed Flight Information
@@ -246,58 +346,6 @@ def main():
         )
         st.plotly_chart(fig_speed, use_container_width=True)
     
-    elif page == "Kalman Filter Visualization":
-        # Kalman Filter Simulation
-        st.header("🔍 Kalman Filter State Estimation")
-        
-        # Simulate Kalman Filter for selected flights
-        for flight in selected_flights:
-            flight_data = filtered_df[filtered_df['flight_id'] == flight]
-            
-            st.subheader(f"Kalman Filter Analysis for {flight}")
-            
-            # Create sample Kalman Filter
-            initial_state = [
-                flight_data['latitude'].iloc[0],
-                flight_data['longitude'].iloc[0],
-                flight_data['altitude'].iloc[0],
-                flight_data['ground_speed'].iloc[0],
-                flight_data['heading'].iloc[0]
-            ]
-            
-            # Noise covariance matrices
-            Q = np.diag([0.0001, 0.0001, 0.01, 0.1, 0.01])
-            R = np.diag([0.001, 0.001, 0.1, 0.5, 0.1])
-            
-            kf = KalmanFilter(initial_state, Q, R)
-            
-            # Simulate some measurements
-            measurements = np.array([initial_state])
-            for _ in range(10):
-                # Simulate noisy measurement
-                noisy_measurement = initial_state + np.random.normal(0, 0.1, 5)
-                measurements = np.vstack([measurements, noisy_measurement])
-                kf.update(noisy_measurement)
-            
-            # Visualization of state estimation
-            fig = go.Figure()
-            state_labels = ['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Heading']
-            
-            for i, label in enumerate(state_labels):
-                fig.add_trace(go.Scatter(
-                    y=[state[i] for state in kf.state_history],
-                    mode='lines+markers',
-                    name=label
-                ))
-            
-            fig.update_layout(
-                title=f'Kalman Filter State Estimation for {flight}',
-                xaxis_title='Measurement Steps',
-                yaxis_title='State Value'
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-    
     elif page == "Statistical Analysis":
         # Statistical Analysis
         st.header("📈 Statistical Flight Analysis")
@@ -315,4 +363,5 @@ def main():
         st.plotly_chart(fig_corr, use_container_width=True)
 
 # Run the main application
-main()
+if __name__ == "__main__":
+    main()
