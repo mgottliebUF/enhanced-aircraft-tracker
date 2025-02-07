@@ -22,6 +22,7 @@ class KalmanFilter:
         """
         # State vector: [latitude, longitude, altitude, velocity, heading]
         self.state = np.array(initial_state, dtype=float)
+        self.initial_state = np.array(initial_state, dtype=float)
         
         # State transition matrix (how state evolves)
         self.F = np.eye(5)  # Identity matrix initially
@@ -37,6 +38,10 @@ class KalmanFilter:
         
         # Estimation error covariance
         self.P = np.eye(5)
+        
+        # Store historical states for visualization
+        self.state_history = [self.state]
+        self.innovation_history = []
     
     def predict(self, dt=1.0):
         """
@@ -73,14 +78,36 @@ class KalmanFilter:
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T @ np.linalg.inv(S)
         
-        # Update state estimation
+        # Calculate innovation (difference between measurement and prediction)
         innovation = measurement - self.H @ self.state
+        self.innovation_history.append(innovation)
+        
+        # Update state estimation
         self.state = self.state + K @ innovation
+        
+        # Store state for visualization
+        self.state_history.append(self.state)
         
         # Update error covariance
         self.P = (np.eye(5) - K @ self.H) @ self.P
         
         return self.state
+    
+    def get_state_history(self):
+        """
+        Get historical states for visualization
+        
+        :return: Array of historical states
+        """
+        return np.array(self.state_history)
+    
+    def get_innovation_history(self):
+        """
+        Get innovation history for analysis
+        
+        :return: Array of innovations
+        """
+        return np.array(self.innovation_history)
     
     def predict_trajectory(self, steps=20):
         """
@@ -104,7 +131,6 @@ def create_process_noise_covariance():
     
     :return: Process noise covariance matrix
     """
-    # Different noise levels for different state variables
     return np.diag([
         0.0001,   # Latitude noise
         0.0001,   # Longitude noise
@@ -119,7 +145,6 @@ def create_measurement_noise_covariance():
     
     :return: Measurement noise covariance matrix
     """
-    # Diagonal matrix representing measurement uncertainties
     return np.diag([
         0.001,    # Latitude measurement noise
         0.001,    # Longitude measurement noise
@@ -194,6 +219,10 @@ def fetch_real_flight_data():
                 # Predict trajectory
                 predicted_trajectory = kf.predict_trajectory()
                 
+                # Get state history for additional analysis
+                state_history = kf.get_state_history()
+                innovation_history = kf.get_innovation_history()
+                
                 flight_entry = {
                     'flight_id': flight_id,
                     'longitude': current_lon,
@@ -203,7 +232,9 @@ def fetch_real_flight_data():
                     'heading': initial_state[4],
                     'predicted_lats': predicted_trajectory[:, 0],
                     'predicted_lons': predicted_trajectory[:, 1],
-                    'predicted_alts': predicted_trajectory[:, 2]
+                    'predicted_alts': predicted_trajectory[:, 2],
+                    'state_history': state_history,
+                    'innovation_history': innovation_history
                 }
                 
                 flights_data.append(flight_entry)
@@ -215,19 +246,20 @@ def fetch_real_flight_data():
         return pd.DataFrame()
 
 def main():
-    st.set_page_config(layout="wide", page_title="Kalman Filter Flight Tracker", page_icon="🛩️")
+    st.set_page_config(layout="wide", page_title="Advanced Kalman Filter Flight Tracker", page_icon="🛩️")
     
-    st.title("🛩️ Kalman Filter Enhanced Flight Tracking")
+    st.title("🛩️ Advanced Kalman Filter Flight Tracking System")
     
     # Sidebar for advanced controls
-    st.sidebar.header("Kalman Filter Tracking Parameters")
-    noise_level = st.sidebar.slider(
-        "Measurement Noise Level", 
-        min_value=0.1, 
-        max_value=10.0, 
-        value=1.0, 
-        step=0.1,
-        help="Adjust the uncertainty in flight measurements"
+    st.sidebar.header("Kalman Filter Analysis")
+    analysis_type = st.sidebar.selectbox(
+        "Select Visualization Type",
+        [
+            "Trajectory Prediction",
+            "State Estimation Detailed",
+            "Innovation Analysis",
+            "Error Covariance Visualization"
+        ]
     )
     
     # Refresh mechanism
@@ -248,92 +280,145 @@ def main():
     # Flight selection
     available_flights = sorted(df['flight_id'].unique())
     selected_flights = st.multiselect(
-        "Select Flights", 
+        "Select Flights for Analysis", 
         available_flights, 
-        default=available_flights[:min(5, len(available_flights))],
-        help="Advanced Kalman Filter trajectory analysis"
+        default=available_flights[:min(3, len(available_flights))],
+        help="Choose flights for detailed Kalman Filter analysis"
     )
     
     # Filtered flight data
     flight_data = df[df['flight_id'].isin(selected_flights)]
     
-    # Visualization
-    st.markdown("### 🗺️ Kalman Filter Trajectory Prediction")
-    
-    # Create map figure
-    fig_map = go.Figure()
-    
-    # Plot flights with predicted trajectories
-    for _, flight in flight_data.iterrows():
-        # Predicted trajectory
-        fig_map.add_trace(go.Scattergeo(
-            lon=flight['predicted_lons'],
-            lat=flight['predicted_lats'],
-            mode='lines+markers',
-            name=f"{flight['flight_id']} Predicted Path",
-            line=dict(width=2, color='blue', dash='dot'),
-            marker=dict(size=5, color='lightblue')
-        ))
+    # Visualization based on selected analysis type
+    if analysis_type == "Trajectory Prediction":
+        # Visualization of predicted trajectories
+        st.markdown("### 🗺️ Kalman Filter Trajectory Prediction")
         
-        # Current position marker
-        fig_map.add_trace(go.Scattergeo(
-            lon=[flight['longitude']],
-            lat=[flight['latitude']],
-            mode='markers',
-            name=flight['flight_id'],
-            marker=dict(
-                size=15, 
-                color='red',
-                symbol='circle',
-                line=dict(width=2, color='darkred')
-            )
-        ))
-    
-    # Enhanced map styling
-    fig_map.update_geos(
-        visible=True, 
-        resolution=50, 
-        scope='usa',
-        showland=True, 
-        landcolor="rgb(229, 229, 229)",
-        oceancolor="rgb(204, 229, 255)"
-    )
-    
-    fig_map.update_layout(
-        title='Kalman Filter Enhanced Flight Trajectories',
-        height=800,
-        geo=dict(
-            center=dict(lon=-98.5795, lat=39.8283),
-            projection_scale=1.5
+        # Create map figure
+        fig_map = go.Figure()
+        
+        # Plot flights with predicted trajectories
+        for _, flight in flight_data.iterrows():
+            # Predicted trajectory
+            fig_map.add_trace(go.Scattergeo(
+                lon=flight['predicted_lons'],
+                lat=flight['predicted_lats'],
+                mode='lines+markers',
+                name=f"{flight['flight_id']} Predicted Path",
+                line=dict(width=2, color='blue', dash='dot'),
+                marker=dict(size=5, color='lightblue')
+            ))
+            
+            # Current position marker
+            fig_map.add_trace(go.Scattergeo(
+                lon=[flight['longitude']],
+                lat=[flight['latitude']],
+                mode='markers',
+                name=flight['flight_id'],
+                marker=dict(
+                    size=15, 
+                    color='red',
+                    symbol='circle',
+                    line=dict(width=2, color='darkred')
+                )
+            ))
+        
+        # Enhanced map styling
+        fig_map.update_geos(
+            visible=True, 
+            resolution=50, 
+            scope='usa',
+            showland=True, 
+            landcolor="rgb(229, 229, 229)",
+            oceancolor="rgb(204, 229, 255)"
         )
-    )
+        
+        fig_map.update_layout(
+            title='Kalman Filter Enhanced Flight Trajectories',
+            height=800,
+            geo=dict(
+                center=dict(lon=-98.5795, lat=39.8283),
+                projection_scale=1.5
+            )
+        )
+        
+        # Display map
+        st.plotly_chart(fig_map, use_container_width=True)
     
-    # Display map
-    st.plotly_chart(fig_map, use_container_width=True)
-    
-    # Detailed Flight Analytics
-    st.markdown("### 📊 Kalman Filter Performance Metrics")
-    
-    # Create columns for detailed analytics
-    cols = st.columns(len(selected_flights))
-    
-    for i, (_, flight) in enumerate(flight_data.iterrows()):
-        with cols[i]:
-            st.markdown(f"#### {flight['flight_id']} Analysis")
+    elif analysis_type == "State Estimation Detailed":
+        # Detailed state estimation visualization
+        st.markdown("### 📊 Kalman Filter State Estimation Analysis")
+        
+        # Create multiple plots for state variables
+        state_vars = ['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Heading']
+        
+        for var_idx, var_name in enumerate(state_vars):
+            fig = go.Figure()
             
-            # Performance metrics
-            st.metric("Current Altitude", f"{flight['altitude']:.0f} ft")
-            st.metric("Ground Speed", f"{flight['ground_speed']:.0f} knots")
-            st.metric("Heading", f"{flight['heading']:.0f}°")
+            for _, flight in flight_data.iterrows():
+                # Get state history for the specific flight
+                state_history = flight['state_history']
+                
+                # Plot the state variable over time
+                fig.add_trace(go.Scatter(
+                    y=state_history[:, var_idx],
+                    mode='lines+markers',
+                    name=f"{flight['flight_id']} - {var_name}",
+                    line=dict(width=2)
+                ))
             
-            # Trajectory prediction details
-            st.markdown("#### Trajectory Prediction")
-            st.metric("Predicted Latitude Range", 
-                      f"{flight['predicted_lats'].min():.4f} to {flight['predicted_lats'].max():.4f}")
-            st.metric("Predicted Longitude Range", 
-                      f"{flight['predicted_lons'].min():.4f} to {flight['predicted_lons'].max():.4f}")
-            st.metric("Predicted Altitude Range", 
-                      f"{flight['predicted_alts'].min():.0f} to {flight['predicted_alts'].max():.0f} ft")
+            fig.update_layout(
+                title=f'Kalman Filter {var_name} State Estimation',
+                xaxis_title='Time Steps',
+                yaxis_title=var_name
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    elif analysis_type == "Innovation Analysis":
+        # Innovation analysis visualization
+        st.markdown("### 🔍 Kalman Filter Innovation Analysis")
+        
+        # Create multiple plots for innovation variables
+        state_vars = ['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Heading']
+        
+        for var_idx, var_name in enumerate(state_vars):
+            fig = go.Figure()
+            
+            for _, flight in flight_data.iterrows():
+                # Get innovation history for the specific flight
+                innovation_history = flight['innovation_history']
+                
+                # Plot the innovation for the specific state variable
+                fig.add_trace(go.Scatter(
+                    y=innovation_history[:, var_idx],
+                    mode='lines+markers',
+                    name=f"{flight['flight_id']} - {var_name}",
+                    line=dict(width=2)
+                ))
+            
+            fig.update_layout(
+                title=f'Kalman Filter {var_name} Innovation',
+                xaxis_title='Measurement Updates',
+                yaxis_title=f'{var_name} Innovation'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    else:  # Error Covariance Visualization
+        # Error covariance analysis
+        st.markdown("### 📈 Kalman Filter Error Covariance Analysis")
+        
+        # Display detailed flight information
+        st.dataframe(
+            flight_data[['flight_id', 'latitude', 'longitude', 'altitude', 'ground_speed', 'heading']],
+            use_container_width=True
+        )
+        
+        # Additional statistical summary
+        st.markdown("#### Statistical Summary")
+        stats_summary = flight_data[['altitude', 'ground_speed', 'heading']].describe()
+        st.dataframe(stats_summary, use_container_width=True)
 
 # Run the main application
 main()
