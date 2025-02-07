@@ -21,7 +21,7 @@ class KalmanFilter:
         
         # State transition matrix
         self.F = np.eye(5)
-        self.F[0, 1] = 0.1  # Slight coupling between state variables
+        self.F[0, 1] = 0.1  # Coupling between state variables
         self.F[1, 2] = 0.1
         
         # Measurement matrix
@@ -39,6 +39,7 @@ class KalmanFilter:
         # Tracking histories
         self.state_history = [self.state.copy()]
         self.innovation_history = []
+        self.kalman_gain_history = []
     
     def predict(self):
         """Prediction step of Kalman Filter"""
@@ -51,6 +52,9 @@ class KalmanFilter:
         # Calculate Kalman Gain
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T @ np.linalg.inv(S)
+        
+        # Store Kalman Gain
+        self.kalman_gain_history.append(K)
         
         # Calculate innovation
         innovation = measurement - self.H @ self.state
@@ -157,7 +161,7 @@ def main():
     st.set_page_config(layout="wide", page_title="Real-Time Flight Tracker", page_icon="🛩️")
     
     # Title and introduction
-    st.title("🛩️ Real-Time Flight Tracking & Analysis")
+    st.title("🛩️ Real-Time Flight Tracking & Kalman Filter Analysis")
     
     # Fetch flight data
     if 'flight_data' not in st.session_state:
@@ -228,6 +232,39 @@ def main():
         fig_speed.update_layout(height=400)
         st.plotly_chart(fig_speed, use_container_width=True)
     
+    # Kalman Filter Theory Explanation
+    st.header("🧮 Kalman Filter Theory")
+    with st.expander("Understanding Kalman Filter"):
+        st.markdown("""
+        ### Kalman Filter: Advanced State Estimation
+
+        #### Core Concept
+        The Kalman Filter is an recursive algorithm that uses a series of measurements observed over time to estimate unknown variables more accurately than a single measurement alone.
+
+        #### Key Components
+        1. **State Vector**: Represents the current state of the system
+           - Includes position, velocity, acceleration
+        
+        2. **Prediction Step**:
+           - Predicts the next state based on previous state
+           - Accounts for system dynamics
+        
+        3. **Update Step**:
+           - Corrects prediction using new measurements
+           - Calculates Kalman Gain to balance model and measurement uncertainty
+
+        #### Mathematical Formulation
+        - **State Transition**: x(k) = F * x(k-1)
+        - **Measurement**: z(k) = H * x(k)
+        - **Kalman Gain**: K(k) = P(k) * H^T * (H * P(k) * H^T + R)^-1
+        - **State Update**: x(k) = x(k) + K(k) * (z(k) - H * x(k))
+
+        #### Advantages
+        - Handles noisy measurements
+        - Works in real-time
+        - Provides optimal state estimation
+        """)
+    
     # Kalman Filter Analysis Section
     st.header("🔍 Kalman Filter Flight State Estimation")
     
@@ -238,7 +275,7 @@ def main():
         default=df['flight_id'].unique()[:3]
     )
     
-    # Kalman Filter Visualization for selected flights
+    # Kalman Filter Analysis for selected flights
     for flight in selected_flights:
         st.subheader(f"Kalman Filter Analysis for {flight}")
         
@@ -248,61 +285,40 @@ def main():
         # Run Kalman Filter simulation
         kf = run_kalman_filter_simulation(flight_data)
         
-        # Visualize Kalman Filter results
-        col_state, col_innovation = st.columns(2)
+        # Create columns for different analyses
+        col1, col2 = st.columns(2)
         
-        with col_state:
-            # State Estimation Visualization
-            st.markdown("#### State Estimation")
-            fig_state = go.Figure()
-            
-            # Convert state history to DataFrame for easier plotting
-            state_history = pd.DataFrame(
+        with col1:
+            # State History Table
+            st.markdown("#### State History")
+            state_history_df = pd.DataFrame(
                 kf.state_history, 
                 columns=['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Acceleration']
             )
-            
-            for column in state_history.columns:
-                fig_state.add_trace(go.Scatter(
-                    y=state_history[column],
-                    mode='lines',
-                    name=column
-                ))
-            
-            fig_state.update_layout(
-                title='Kalman Filter State Estimation',
-                xaxis_title='Time Steps',
-                yaxis_title='State Value'
-            )
-            st.plotly_chart(fig_state, use_container_width=True)
+            st.dataframe(state_history_df.describe(), use_container_width=True)
         
-        with col_innovation:
-            # Innovation Analysis
+        with col2:
+            # Innovation Analysis Table
             st.markdown("#### Innovation Analysis")
             if kf.innovation_history:
-                fig_innovation = go.Figure()
-                
-                # Convert innovation history to DataFrame
-                innovation_history = pd.DataFrame(
+                innovation_df = pd.DataFrame(
                     kf.innovation_history, 
                     columns=['Latitude', 'Longitude', 'Altitude', 'Velocity', 'Acceleration']
                 )
-                
-                for column in innovation_history.columns:
-                    fig_innovation.add_trace(go.Scatter(
-                        y=innovation_history[column],
-                        mode='lines',
-                        name=column
-                    ))
-                
-                fig_innovation.update_layout(
-                    title='Kalman Filter Innovations',
-                    xaxis_title='Measurement Steps',
-                    yaxis_title='Innovation'
-                )
-                st.plotly_chart(fig_innovation, use_container_width=True)
+                st.dataframe(innovation_df.describe(), use_container_width=True)
             else:
                 st.write("No innovation data available")
+        
+        # Detailed Kalman Gain Analysis
+        st.markdown("#### Kalman Gain Analysis")
+        if kf.kalman_gain_history:
+            kalman_gain_df = pd.DataFrame(
+                kf.kalman_gain_history, 
+                columns=['Lat Gain', 'Lon Gain', 'Alt Gain', 'Vel Gain', 'Acc Gain']
+            )
+            st.dataframe(kalman_gain_df.describe(), use_container_width=True)
+        else:
+            st.write("No Kalman Gain data available")
 
 # Run the main application
 if __name__ == "__main__":
