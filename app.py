@@ -3,147 +3,186 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 from datetime import datetime, timedelta
 
-# Aircraft patterns
-AIRCRAFT_PATTERNS = {
-    'commercial_large': {
-        'cruise_alt': (32000, 38000),
-        'speed': (450, 550),
-        'climb_rate': (1000, 2500),
-        'rcs_range': (70, 100),
-    },
-    'commercial_medium': {
-        'cruise_alt': (28000, 34000),
-        'speed': (400, 480),
-        'climb_rate': (800, 2000),
-        'rcs_range': (50, 80),
-    },
-    'private_jet': {
-        'cruise_alt': (15000, 25000),
-        'speed': (300, 450),
-        'climb_rate': (500, 1500),
-        'rcs_range': (30, 50),
-    }
+# Contiguous US Bounding Box Coordinates
+US_BBOX = {
+    'min_lon': -125.0,   # West Coast (California)
+    'max_lon': -66.0,    # East Coast (Maine)
+    'min_lat': 24.0,     # Southern Border (Florida)
+    'max_lat': 49.0,     # Northern Border (Washington/Minnesota)
 }
 
-def generate_weather_data(flight_path_df):
-    """Generate weather data along flight path"""
-    weather_data = pd.DataFrame()
-    weather_data['timestamp'] = flight_path_df['timestamp']
-    weather_data['wind_speed'] = 10 + 5 * np.sin(flight_path_df['time']/1000) + np.random.normal(0, 2, len(flight_path_df))
-    weather_data['wind_direction'] = 180 + 45 * np.sin(flight_path_df['time']/2000) + np.random.normal(0, 5, len(flight_path_df))
-    weather_data['temperature'] = 15 - (flight_path_df['altitude']/1000) * 2 + np.random.normal(0, 1, len(flight_path_df))
-    weather_data['turbulence'] = np.random.choice(['None', 'Light', 'Moderate', 'Severe'], p=[0.5, 0.3, 0.15, 0.05], size=len(flight_path_df))
-    return weather_data
-
-def generate_flight_data(n_flights=10, points_per_flight=200):
-    flights = []
-    for i in range(n_flights):
-        aircraft_type = np.random.choice(list(AIRCRAFT_PATTERNS.keys()), p=[0.4, 0.3, 0.3])
-        pattern = AIRCRAFT_PATTERNS[aircraft_type]
-        t = np.linspace(0, points_per_flight * 5, points_per_flight)
-        cruise_alt = np.random.uniform(*pattern['cruise_alt'])
-        z = np.zeros(points_per_flight)
-        climb_idx = int(points_per_flight * 0.15)
-        cruise_idx = int(points_per_flight * 0.8)
-        z[:climb_idx] = np.cumsum(np.random.uniform(pattern['climb_rate'][0]/720, pattern['climb_rate'][1]/720, climb_idx))
-        z[:climb_idx] = z[:climb_idx] * (cruise_alt / z[climb_idx-1])
-        z[climb_idx:cruise_idx] = cruise_alt + np.random.normal(0, 200, cruise_idx-climb_idx)
-        z[cruise_idx:] = np.linspace(cruise_alt, 0, len(z[cruise_idx:]))
-        speed = np.random.uniform(*pattern['speed'])
-        distance = speed * t/3600
-        base_theta = np.linspace(0, np.pi/4, points_per_flight)
-        course_corrections = np.sin(t/500) * 0.1
-        holding_pattern = 0  # Added this missing variable
-        aspect_effect = 0  # Added this missing variable
-        theta = base_theta + course_corrections + holding_pattern
-        x = distance * np.cos(theta)
-        y = distance * np.sin(theta)
-        x += np.random.normal(0, 0.01, points_per_flight)
-        y += np.random.normal(0, 0.01, points_per_flight)
-        ground_speed = np.sqrt(np.gradient(x)**2 + np.gradient(y)**2) * 3600
-        vertical_speed = np.gradient(z) * 60
-        heading = np.degrees(np.arctan2(np.gradient(y), np.gradient(x))) % 360
-        base_rcs = np.random.uniform(*pattern['rcs_range'], points_per_flight)
-        altitude_effect = -z/50000
-        rcs = base_rcs + aspect_effect + altitude_effect
-        start_time = datetime.now() - timedelta(hours=np.random.uniform(0, 24))
-        timestamps = [start_time + timedelta(seconds=int(t_)) for t_ in t]
-        flight_df = pd.DataFrame({
-            'flight_id': f'FL{i:03d}',
-            'aircraft_type': aircraft_type,
-            'timestamp': timestamps,
-            'time': t,
-            'longitude': x,
-            'latitude': y,
-            'altitude': z,
-            'ground_speed': ground_speed,
-            'vertical_speed': vertical_speed,
-            'heading': heading,
-            'radar_cross_section': rcs
-        })
-        weather_df = generate_weather_data(flight_df)
-        flight_df = pd.concat([flight_df, weather_df], axis=1)
-        flights.append(flight_df)
-    return pd.concat(flights, ignore_index=True)
+def fetch_real_flight_data():
+    """
+    Fetch real-time flight data from OpenSky Network API
+    Filters flights within the continental US
+    """
+    try:
+        # Parameters for API request
+        params = {
+            'lamin': US_BBOX['min_lat'],
+            'lomin': US_BBOX['min_lon'],
+            'lamax': US_BBOX['max_lat'],
+            'lomax': US_BBOX['max_lon']
+        }
+        
+        # Make API request
+        response = requests.get(
+            "https://opensky-network.org/api/states/all", 
+            params=params
+        )
+        
+        if response.status_code != 200:
+            st.error(f"Failed to fetch flight data: {response.status_code}")
+            return pd.DataFrame()
+        
+        # Parse response
+        data = response.json()
+        
+        flights_data = []
+        for flight in data['states']:
+            # Validate and clean data
+            if (flight[5] is not None and flight[6] is not None and 
+                US_BBOX['min_lon'] <= flight[5] <= US_BBOX['max_lon'] and 
+                US_BBOX['min_lat'] <= flight[6] <= US_BBOX['max_lat']):
+                
+                flights_data.append({
+                    'flight_id': flight[1].strip() or 'Unknown',
+                    'longitude': flight[5],
+                    'latitude': flight[6],
+                    'altitude': (flight[7] or 0) * 3.28084,  # Convert meters to feet
+                    'ground_speed': (flight[9] or 0) * 1.94384,  # Convert m/s to knots
+                    'heading': flight[10],
+                    'vertical_rate': (flight[11] or 0) * 196.85,  # Convert m/s to ft/min
+                    'country': flight[2]
+                })
+        
+        return pd.DataFrame(flights_data)
+    
+    except Exception as e:
+        st.error(f"Error fetching flight data: {e}")
+        return pd.DataFrame()
 
 # Page setup
-st.set_page_config(layout="wide", page_title="Aircraft Tracking System")
+st.set_page_config(layout="wide", page_title="Real-Time US Flight Tracker")
 
 # Title
-st.title("Aircraft Tracking System")
+st.title("Real-Time Flight Tracking over Continental US")
 
-# Sidebar controls
-st.sidebar.header("Control Panel")
-
-# Data loading
-@st.cache_data
+# Data loading with caching
+@st.cache_data(ttl=60)  # Cache for 60 seconds
 def load_data():
-    return generate_flight_data()
+    return fetch_real_flight_data()
 
+# Fetch data
 df = load_data()
 
-# Flight selection
-available_flights = sorted(pd.unique(df['flight_id']))
-selected_flights = st.sidebar.multiselect("Select Flights", available_flights, default=[available_flights[0]])
+# Check if we have data
+if df.empty:
+    st.warning("No flight data available. Check network connection.")
+else:
+    # Flight selection
+    available_flights = sorted(df['flight_id'].unique())
+    selected_flights = st.sidebar.multiselect(
+        "Select Flights", 
+        available_flights, 
+        default=available_flights[:min(3, len(available_flights))]
+    )
 
-# Display options
-show_weather = st.sidebar.checkbox("Show Weather", True)
-show_trajectory = st.sidebar.checkbox("Show Trajectory", True)
-rcs_threshold = st.sidebar.slider("RCS Threshold", 1.0, 5.0, 2.0)
+    # Filter data
+    flight_data = df[df['flight_id'].isin(selected_flights)]
 
-# Filter data
-flight_data = df[df['flight_id'].isin(selected_flights)]
+    # Main display
+    col1, col2 = st.columns(2)
 
-# Main display
-col1, col2 = st.columns(2)
+    with col1:
+        # Create US map with flight trajectories
+        fig = go.Figure()
 
-with col1:
-    # 3D Flight Path
-    fig_3d = px.scatter_3d(flight_data, x='longitude', y='latitude', z='altitude', color='flight_id', title="3D Flight Paths")
-    st.plotly_chart(fig_3d, use_container_width=True)
+        # Add US map background
+        fig.add_trace(go.Scattergeo(
+            lon=[-98.5795],
+            lat=[39.8283],
+            mode='markers',
+            marker=dict(
+                size=1,
+                color='rgba(0,0,0,0)',
+                opacity=0
+            ),
+            showlegend=False
+        ))
 
-with col2:
-    if show_weather:
-        fig_weather = go.Figure()
-        for flight_id in selected_flights:
-            flight_subset = flight_data[flight_data['flight_id'] == flight_id]
-            fig_weather.add_trace(go.Scatter(x=flight_subset['time'], y=flight_subset['wind_speed'], name=f"{flight_id} - Wind Speed", mode='lines'))
-        fig_weather.update_layout(title="Weather Conditions")
-        st.plotly_chart(fig_weather, use_container_width=True)
+        # Plot flights
+        for flight in selected_flights:
+            flight_subset = flight_data[flight_data['flight_id'] == flight]
+            fig.add_trace(go.Scattergeo(
+                lon=flight_subset['longitude'],
+                lat=flight_subset['latitude'],
+                mode='lines+markers',
+                name=flight,
+                line=dict(width=2),
+                marker=dict(
+                    size=7,
+                    color='red'
+                )
+            ))
 
-# Flight Details
-st.header("Flight Details")
-for flight_id in selected_flights:
-    flight_subset = flight_data[flight_data['flight_id'] == flight_id]
-    st.subheader(f"Flight {flight_id}")
-    cols = st.columns(4)
-    with cols[0]:
-        st.metric("Aircraft Type", flight_subset['aircraft_type'].iloc[0].replace('_', ' ').title())
-    with cols[1]:
-        st.metric("Max Ground Speed", f"{flight_subset['ground_speed'].max():.0f} knots")
-    with cols[2]:
-        st.metric("Max Altitude", f"{flight_subset['altitude'].max():.0f} feet")
-    with cols[3]:
-        st.metric("Avg Vertical Speed", f"{flight_subset['vertical_speed'].mean():.0f} ft/min")
+        # Update layout for US map
+        fig.update_geos(
+            visible=True,
+            resolution=50,
+            scope='usa',
+            showland=True, 
+            landcolor="rgb(217, 217, 217)",
+            subunitcolor="rgb(255, 255, 255)",
+            countrycolor="rgb(255, 255, 255)",
+            showlakes=True, 
+            lakecolor="rgb(255, 255, 255)",
+            showsubunits=True,
+            showcountries=True,
+            showocean=True,
+            oceancolor="rgb(230, 255, 255)"
+        )
+
+        fig.update_layout(
+            title='Real-Time Flight Paths Across the United States',
+            height=600,
+            margin={"r":0,"t":30,"l":0,"b":0}
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        # Flight Details Table
+        st.dataframe(
+            flight_data[['flight_id', 'country', 'altitude', 'ground_speed', 'heading']], 
+            hide_index=True
+        )
+
+    # Detailed Flight Information
+    st.header("Selected Flight Details")
+    for flight in selected_flights:
+        flight_subset = flight_data[flight_data['flight_id'] == flight]
+        
+        st.subheader(f"Flight {flight}")
+        cols = st.columns(4)
+        
+        with cols[0]:
+            st.metric("Country", flight_subset['country'].iloc[0])
+        with cols[1]:
+            st.metric("Max Altitude", f"{flight_subset['altitude'].max():.0f} ft")
+        with cols[2]:
+            st.metric("Avg Ground Speed", f"{flight_subset['ground_speed'].mean():.0f} knots")
+        with cols[3]:
+            st.metric("Heading", f"{flight_subset['heading'].mean():.0f}°")
+
+    # Additional context
+    st.markdown("""
+    ### About This Visualization
+    - Real-time flight data from OpenSky Network
+    - Flights tracked over Continental US
+    - Data refreshes every minute
+    - [Learn more about OpenSky Network](https://opensky-network.org/)
+    """)
