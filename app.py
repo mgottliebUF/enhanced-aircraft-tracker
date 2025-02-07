@@ -55,6 +55,8 @@ def generate_flight_data(n_flights=10, points_per_flight=200):
         distance = speed * t/3600
         base_theta = np.linspace(0, np.pi/4, points_per_flight)
         course_corrections = np.sin(t/500) * 0.1
+        holding_pattern = 0  # Added this missing variable
+        aspect_effect = 0  # Added this missing variable
         theta = base_theta + course_corrections + holding_pattern
         x = distance * np.cos(theta)
         y = distance * np.sin(theta)
@@ -62,7 +64,7 @@ def generate_flight_data(n_flights=10, points_per_flight=200):
         y += np.random.normal(0, 0.01, points_per_flight)
         ground_speed = np.sqrt(np.gradient(x)**2 + np.gradient(y)**2) * 3600
         vertical_speed = np.gradient(z) * 60
-        heading = np.degrees(np.arctan2(np.gradient(y), np.gradient(x))) %% 360
+        heading = np.degrees(np.arctan2(np.gradient(y), np.gradient(x))) % 360
         base_rcs = np.random.uniform(*pattern['rcs_range'], points_per_flight)
         altitude_effect = -z/50000
         rcs = base_rcs + aspect_effect + altitude_effect
@@ -91,10 +93,6 @@ st.set_page_config(layout="wide", page_title="Aircraft Tracking System")
 
 # Title
 st.title("Aircraft Tracking System")
-### Real-time Flight Monitoring
-- Multi-aircraft tracking
-- Weather integration
-- Performance analytics
 
 # Sidebar controls
 st.sidebar.header("Control Panel")
