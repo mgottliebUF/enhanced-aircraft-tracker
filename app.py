@@ -6,6 +6,11 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime, timedelta
 import math
+import time
+
+# Global variable to track last API call time
+LAST_API_CALL_TIME = 0
+API_CALL_INTERVAL = 60  # Minimum seconds between API calls
 
 # Predefined major US airports
 MAJOR_AIRPORTS = {
@@ -59,6 +64,14 @@ def fetch_real_flight_data():
     Fetch real-time flight data from OpenSky Network API
     Filters flights within the continental US
     """
+    global LAST_API_CALL_TIME
+    
+    # Rate limiting
+    current_time = time.time()
+    if current_time - LAST_API_CALL_TIME < API_CALL_INTERVAL:
+        st.warning(f"Waiting {API_CALL_INTERVAL} seconds between API calls to avoid rate limits.")
+        time.sleep(API_CALL_INTERVAL - (current_time - LAST_API_CALL_TIME))
+    
     try:
         # Parameters for API request
         params = {
@@ -74,6 +87,9 @@ def fetch_real_flight_data():
             params=params
         )
         
+        # Update last API call time
+        LAST_API_CALL_TIME = time.time()
+        
         if response.status_code != 200:
             st.error(f"Failed to fetch flight data: {response.status_code}")
             return pd.DataFrame()
@@ -81,8 +97,10 @@ def fetch_real_flight_data():
         # Parse response
         data = response.json()
         
+        # Limit number of flights to prevent overwhelming the app
+        max_flights = 50
         flights_data = []
-        for flight in data['states']:
+        for flight in data['states'][:max_flights]:
             # Validate and clean data
             if (flight[5] is not None and flight[6] is not None and 
                 US_BBOX['min_lon'] <= flight[5] <= US_BBOX['max_lon'] and 
@@ -107,6 +125,7 @@ def fetch_real_flight_data():
                 if origin:
                     flight_entry.update({
                         'origin_airport': airport_code,
+                        'origin_name': origin['name'],
                         'origin_lat': origin['lat'],
                         'origin_lon': origin['lon']
                     })
@@ -119,16 +138,24 @@ def fetch_real_flight_data():
         # Calculate additional metrics
         if not df.empty:
             # Calculate estimated flight distance and time
-            for idx, row in df.iterrows():
+            distances = []
+            est_times = []
+            for _, row in df.iterrows():
                 if 'origin_lat' in row and 'origin_lon' in row:
                     distance = haversine_distance(
                         row['origin_lat'], row['origin_lon'], 
                         row['latitude'], row['longitude']
                     )
-                    df.at[idx, 'estimated_distance'] = distance
+                    distances.append(distance)
                     # Estimate time based on ground speed (if available)
-                    if row['ground_speed'] > 0:
-                        df.at[idx, 'estimated_time'] = distance / row['ground_speed']
+                    est_time = distance / row['ground_speed'] if row['ground_speed'] > 0 else np.nan
+                    est_times.append(est_time)
+                else:
+                    distances.append(np.nan)
+                    est_times.append(np.nan)
+            
+            df['estimated_distance'] = distances
+            df['estimated_time'] = est_times
         
         return df
     
@@ -255,24 +282,29 @@ else:
         st.plotly_chart(fig_vertical, use_container_width=True)
 
     with col5:
-        # Flight Details Table with Estimated Metrics
+        # Flight Details Table
+        # Use .get() to safely access columns with defaults
         details_df = flight_data.copy()
-        if 'estimated_distance' in details_df.columns:
-            details_df['estimated_distance'] = details_df['estimated_distance'].round(1)
-        if 'estimated_time' in details_df.columns:
-            details_df['estimated_time'] = details_df['estimated_time'].round(2)
+        
+        # Prepare columns with safe fallback
+        display_columns = ['flight_id', 'altitude', 'ground_speed']
+        optional_columns = ['origin_airport', 'estimated_distance', 'estimated_time']
+        
+        # Add optional columns if they exist
+        for col in optional_columns:
+            if col in details_df.columns:
+                display_columns.append(col)
         
         st.dataframe(
-            details_df[['flight_id', 'origin_airport', 'altitude', 'ground_speed', 
-                        'estimated_distance', 'estimated_time']], 
+            details_df[display_columns], 
             column_config={
                 'estimated_distance': st.column_config.NumberColumn(
                     "Est. Distance (miles)",
-                    format="%.1f mi"
+                    format="%.1f mi" if 'estimated_distance' in details_df.columns else None
                 ),
                 'estimated_time': st.column_config.NumberColumn(
                     "Est. Flight Time (hrs)",
-                    format="%.2f hrs"
+                    format="%.2f hrs" if 'estimated_time' in details_df.columns else None
                 )
             },
             hide_index=True,
@@ -297,6 +329,7 @@ else:
     st.markdown("""
     ### About This Visualization
     - Real-time flight data from OpenSky Network
+    - Limited to 50 flights to prevent API overload
     - Multiple analytics and visualizations
     - Estimated flight metrics
     - Click 'Refresh Flight Data' to get latest information
